@@ -1113,7 +1113,7 @@ $('fimp').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f||
 /* ===== 7c. PUBLICAÇÃO CENTRAL (Supabase via função do servidor) ===== */
 // Leitura: direto do Supabase com a chave pública (RLS só permite SELECT nas 2 tabelas do painel).
 // Escrita: somente pela função do servidor, que valida o login no servidor. O navegador nunca grava no banco.
-const FN_PUB='/api/painel-publish',FN_CFG='/api/painel-config',AUTH_K='ftr-auth',PEND_K='ftr-pending-pub';
+const SB_URL='https://krscjbdphymgzjteclif.supabase.co',SB_KEY='sb_publishable_HSW-mqcJySZAo4GnnQ6U1A_l4K4I0qv',FN_PUB=SB_URL+'/functions/v1/painel-publish',AUTH_K='ftr-auth',PEND_K='ftr-pending-pub';
 let CFG=null,syncing=false,REMOTE_KEYS=new Set(),AM=null,LASTEMAIL='';
 const PUBINFO={status:'idle',at:null,file:'',key:'',msg:''};
 const pubLabel=()=>PUBINFO.status==='ok'&&PUBINFO.at?esc(fmtDt(PUBINFO.at)):PUBINFO.status==='loading'?'<span class="mut">consultando o servidor…</span>':PUBINFO.status==='erro'?'<span class="red">sem conexão com o servidor</span>':PUBINFO.status==='vazio'?'<span class="mut">nenhuma publicação ainda</span>':'<span class="mut">—</span>';
@@ -1122,8 +1122,7 @@ const setPend=v=>{try{v?localStorage.setItem(PEND_K,JSON.stringify(v)):localStor
 const getAuth=()=>{if(AM&&AM.access)return AM;try{const a=JSON.parse(sessionStorage.getItem(AUTH_K)||'null');return a&&a.access?a:null}catch(_){return null}};
 const setAuth=a=>{AM=a||null;try{a?sessionStorage.setItem(AUTH_K,JSON.stringify(a)):sessionStorage.removeItem(AUTH_K)}catch(_){}};
 const clearAuth=()=>setAuth(null);
-async function getCfg(){if(CFG)return CFG;let r;try{r=await fetch(FN_CFG,{cache:'no-store'})}catch(e){throw new Error('função de configuração inacessível (abra o painel pelo endereço publicado)')}
-  const j=await r.json().catch(()=>null);if(!r.ok||!j||!j.url||!j.key)throw new Error((j&&j.error)||'configuração do servidor indisponível (HTTP '+r.status+')');CFG={url:String(j.url).replace(/\/+$/,''),key:j.key};return CFG}
+async function getCfg(){if(!CFG)CFG={url:SB_URL,key:SB_KEY};return CFG}
 const sbH=c=>{const h={apikey:c.key,Accept:'application/json'};if(/^eyJ/.test(c.key))h.Authorization='Bearer '+c.key;return h};
 async function sbGet(c,path){const r=await fetch(c.url+'/rest/v1/'+path,{headers:sbH(c),cache:'no-store'});
   if(!r.ok){let m='';try{const j=await r.json();m=j.message||j.hint||''}catch(_){}throw new Error('Supabase respondeu HTTP '+r.status+(m?' — '+m:''))}return r.json()}

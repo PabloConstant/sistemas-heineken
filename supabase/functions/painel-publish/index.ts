@@ -1,21 +1,33 @@
-// functions/api/painel-publish.js  →  rota /api/painel-publish  (Cloudflare Pages Functions)
-// Publica uma importação validada no Supabase. A autorização é validada AQUI, no servidor:
+// @ts-nocheck -- funções puras copiadas do painel (JS); tipagem relaxada de propósito
+// Supabase Edge Function: painel-publish
+// URL: https://krscjbdphymgzjteclif.supabase.co/functions/v1/painel-publish
+// Publica uma importação validada do Painel FTR. A autorização é validada AQUI, no servidor:
 //   1) o token do usuário (Supabase Auth) é conferido no Supabase;
-//   2) o e-mail precisa estar confirmado e constar em PUBLISHER_EMAILS.
-// A gravação usa a chave secreta (SUPABASE_SECRET_KEY), que existe só nas variáveis do Cloudflare.
-// Adaptado de netlify/functions/painel-publish.mjs — validação, checksum e resumo idênticos.
+//   2) o e-mail precisa estar confirmado e constar na tabela privada public.painel_publicadores.
+// A gravação usa a chave secreta do próprio projeto (variável padrão das Edge Functions),
+// que nunca sai do Supabase. Implantar com verify_jwt = false: o login é conferido no código.
+// Lógica idêntica à antiga função do Netlify (netlify/functions/painel-publish.mjs).
 
-const MAX_BODY = 5 * 1024 * 1024; // mantido igual ao Netlify (o Cloudflare aceita até 100 MB)
+const MAX_BODY = 5 * 1024 * 1024;
 const SLOTS = ['CONSOL.', 'BREWHOUSE 1', 'BREWHOUSE 3', 'FERMENTHP', 'FERMENTAMSTELPRAY', 'BRIGHT BEER'];
 const KEY_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
+// Sites que podem chamar esta função pelo navegador.
+const DEFAULT_ORIGINS = ['https://pabloconstant.github.io'];
 
-let ENV = {};
-const env = (k) => String(ENV[k] || '').trim();
-const reply = (status, obj) =>
-  new Response(JSON.stringify(obj), {
-    status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
-  });
+type Env = (k: string) => string | undefined;
+
+function keyFrom(env: Env, jsonName: string, legacyName: string): string {
+  const raw = env(jsonName);
+  if (raw) {
+    try {
+      const o = JSON.parse(raw);
+      if (o && typeof o.default === 'string') return o.default;
+      const first = Object.values(o || {}).find((v) => typeof v === 'string');
+      if (first) return first as string;
+    } catch (_e) { /* cai para a chave legada */ }
+  }
+  return (env(legacyName) || '').trim();
+}
 
 // ---- mesmas funções puras do painel (checksum, classificação, resumo) ----
 function fnv(s) {
@@ -122,45 +134,74 @@ function validatePayload(d, key) {
   return errs;
 }
 
-export async function onRequest({ request: req, env: cfEnv }) {
-  ENV = cfEnv || {};
-  if (req.method !== 'POST') return reply(405, { ok: false, error: 'Método não permitido.' });
 
-  const SB = env('SUPABASE_URL').replace(/\/+$/, '');
-  const PUB = env('SUPABASE_PUBLISHABLE_KEY');
-  const SEC = env('SUPABASE_SECRET_KEY');
-  const ALLOW = env('PUBLISHER_EMAILS').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  if (!SB || !PUB || !SEC || !ALLOW.length)
-    return reply(500, { ok: false, error: 'Servidor sem configuração completa (variáveis de ambiente do Cloudflare).' });
+function cors(origin: string | null, allowed: string[]): Record<string, string> {
+  if (!origin || !allowed.includes(origin)) return { Vary: 'Origin' };
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'authorization, content-type, apikey, x-client-info',
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin',
+  };
+}
 
-  const origins = env('ALLOWED_ORIGINS').split(',').map((s) => s.trim()).filter(Boolean);
+export async function handle(req: Request, env: Env): Promise<Response> {
+  const extra = (env('ALLOWED_ORIGINS') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const allowed = extra.length ? extra : DEFAULT_ORIGINS;
   const origin = req.headers.get('origin');
-  if (origins.length && origin && !origins.includes(origin)) return reply(403, { ok: false, error: 'Origem não permitida.' });
+  const ch = cors(origin, allowed);
+  const reply = (status: number, obj: unknown) =>
+    new Response(JSON.stringify(obj), {
+      status,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...ch },
+    });
+
+  if (req.method === 'OPTIONS') return new Response(null, { status: origin && allowed.includes(origin) ? 204 : 403, headers: ch });
+  if (req.method !== 'POST') return reply(405, { ok: false, error: 'Método não permitido.' });
+  if (origin && !allowed.includes(origin)) return reply(403, { ok: false, error: 'Origem não permitida.' });
+
+  const SB = (env('SUPABASE_URL') || '').trim().replace(/\/+$/, '');
+  const PUB = keyFrom(env, 'SUPABASE_PUBLISHABLE_KEYS', 'SUPABASE_ANON_KEY');
+  const SEC = keyFrom(env, 'SUPABASE_SECRET_KEYS', 'SUPABASE_SERVICE_ROLE_KEY');
+  if (!SB || !PUB || !SEC) return reply(500, { ok: false, error: 'Servidor sem configuração completa (chaves do projeto).' });
+  const adm: Record<string, string> = { apikey: SEC, 'Content-Type': 'application/json' };
+  if (/^eyJ/.test(SEC)) adm.Authorization = 'Bearer ' + SEC; // chave legada service_role (JWT)
 
   // 1) autenticação: token do Supabase Auth conferido no servidor
   const m = /^Bearer\s+(.+)$/i.exec(req.headers.get('authorization') || '');
   if (!m) return reply(401, { ok: false, error: 'Login necessário para publicar.' });
-  let user;
+  // deno-lint-ignore no-explicit-any
+  let user: any;
   try {
     const r = await fetch(SB + '/auth/v1/user', { headers: { apikey: PUB, Authorization: 'Bearer ' + m[1] } });
     if (!r.ok) return reply(401, { ok: false, error: 'Sessão inválida ou expirada. Entre novamente.' });
     user = await r.json();
-  } catch (e) {
+  } catch (_e) {
     return reply(502, { ok: false, error: 'Não foi possível validar o login no Supabase.' });
   }
   const email = String((user && user.email) || '').toLowerCase();
   if (!email || !(user.email_confirmed_at || user.confirmed_at)) return reply(403, { ok: false, error: 'E-mail do usuário não confirmado.' });
-  // 2) autorização: lista de e-mails mantida só no servidor
-  if (!ALLOW.includes(email)) return reply(403, { ok: false, error: 'Este usuário não está autorizado a publicar.' });
+
+  // 2) autorização: lista privada de publicadores no banco
+  try {
+    const r = await fetch(SB + '/rest/v1/painel_publicadores?select=email&email=eq.' + encodeURIComponent(email), { headers: adm });
+    if (!r.ok) return reply(502, { ok: false, error: 'Não foi possível conferir a autorização no banco.' });
+    const rows = await r.json();
+    if (!Array.isArray(rows) || !rows.length) return reply(403, { ok: false, error: 'Este usuário não está autorizado a publicar.' });
+  } catch (_e) {
+    return reply(502, { ok: false, error: 'Não foi possível conferir a autorização no banco.' });
+  }
 
   // 3) payload
   const len = Number(req.headers.get('content-length') || 0);
   if (len > MAX_BODY) return reply(413, { ok: false, error: 'Arquivo grande demais para publicar.' });
-  let raw;
-  try { raw = await req.text(); } catch (e) { return reply(400, { ok: false, error: 'Corpo da requisição ilegível.' }); }
+  let raw: string;
+  try { raw = await req.text(); } catch (_e) { return reply(400, { ok: false, error: 'Corpo da requisição ilegível.' }); }
   if (raw.length > MAX_BODY) return reply(413, { ok: false, error: 'Arquivo grande demais para publicar.' });
-  let body;
-  try { body = JSON.parse(raw); } catch (e) { return reply(400, { ok: false, error: 'JSON inválido.' }); }
+  // deno-lint-ignore no-explicit-any
+  let body: any;
+  try { body = JSON.parse(raw); } catch (_e) { return reply(400, { ok: false, error: 'JSON inválido.' }); }
 
   const { file, periodKey, checksum, dataJson } = body || {};
   const setCurrent = body && body.setCurrent === false ? false : true;
@@ -169,22 +210,22 @@ export async function onRequest({ request: req, env: cfEnv }) {
   if (typeof dataJson !== 'string' || typeof checksum !== 'string') return reply(422, { ok: false, error: 'Dados ausentes.' });
   if (fnv(dataJson) !== checksum) return reply(422, { ok: false, error: 'Verificação de integridade falhou (checksum).' });
 
-  let d;
-  try { d = JSON.parse(dataJson); } catch (e) { return reply(422, { ok: false, error: 'Dados ilegíveis.' }); }
+  // deno-lint-ignore no-explicit-any
+  let d: any;
+  try { d = JSON.parse(dataJson); } catch (_e) { return reply(422, { ok: false, error: 'Dados ilegíveis.' }); }
   const errs = validatePayload(d, periodKey);
   if (errs.length) return reply(422, { ok: false, error: 'A validação do servidor recusou os dados. A versão anterior foi preservada.', details: errs.slice(0, 20) });
 
-  let summary = null;
-  try { summary = summarize(d); } catch (e) { return reply(422, { ok: false, error: 'Não foi possível calcular o resumo dos dados.' }); }
+  // deno-lint-ignore no-explicit-any
+  let summary: any = null;
+  try { summary = summarize(d); } catch (_e) { return reply(422, { ok: false, error: 'Não foi possível calcular o resumo dos dados.' }); }
 
   // 4) gravação atômica (função SQL painel_publish), com a chave secreta
-  const h = { apikey: SEC, 'Content-Type': 'application/json' };
-  if (/^eyJ/.test(SEC)) h.Authorization = 'Bearer ' + SEC; // chave legada service_role (JWT)
-  let res;
+  let res: Response;
   try {
     res = await fetch(SB + '/rest/v1/rpc/painel_publish', {
       method: 'POST',
-      headers: h,
+      headers: adm,
       body: JSON.stringify({
         p_period_key: periodKey,
         p_file_name: file.trim(),
@@ -195,7 +236,7 @@ export async function onRequest({ request: req, env: cfEnv }) {
         p_set_current: setCurrent,
       }),
     });
-  } catch (e) {
+  } catch (_e) {
     return reply(502, { ok: false, error: 'Sem conexão com o Supabase. A versão anterior foi preservada.' });
   }
   if (!res.ok) {
@@ -213,3 +254,7 @@ export async function onRequest({ request: req, env: cfEnv }) {
     currentSet: !!out.current_set,
   });
 }
+
+// deno-lint-ignore no-explicit-any
+const D = (globalThis as any).Deno;
+if (D && typeof D.serve === 'function') D.serve((req: Request) => handle(req, (k: string) => D.env.get(k)));
