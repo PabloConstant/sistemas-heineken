@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sistemas da Fermentação · Heineken</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --fundo: #eef1ec;
+    --cartao: #ffffff;
+    --primaria: #1f4d3a;
+    --primaria-clara: #3c7a5c;
+    --texto: #1c2621;
+    --texto-suave: #4b5750;
+    --borda: #d7ded3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fundo: #121a16;
+      --cartao: #1b2620;
+      --primaria: #7fc4a0;
+      --primaria-clara: #a6d9bd;
+      --texto: #e6ece8;
+      --texto-suave: #a9b6ae;
+      --borda: #2c3a32;
+    }
+    .logo { filter: brightness(0) invert(1); opacity: .9; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--fundo);
+    color: var(--texto);
+    font-family: "IBM Plex Sans", "Segoe UI", Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px;
+  }
+  main { width: 100%; max-width: 560px; }
+  .logo { display: block; height: 44px; margin: 0 auto 20px; }
+  h1 { font-size: 1.35rem; font-weight: 600; text-align: center; margin: 0 0 6px; }
+  .sub { text-align: center; color: var(--texto-suave); margin: 0 0 28px; font-size: .95rem; }
+  .lista { display: grid; gap: 12px; }
+  a.sistema {
+    display: block;
+    background: var(--cartao);
+    border: 1px solid var(--borda);
+    border-left: 4px solid var(--primaria);
+    border-radius: 6px;
+    padding: 18px 20px;
+    color: inherit;
+    text-decoration: none;
+    transition: border-color .15s, transform .15s;
+  }
+  a.sistema:hover, a.sistema:focus-visible { border-color: var(--primaria-clara); transform: translateY(-1px); outline: none; }
+  .nome { font-weight: 600; font-size: 1.05rem; color: var(--primaria); }
+  .desc { color: var(--texto-suave); font-size: .9rem; margin-top: 4px; }
+</style>
+</head>
+<body>
+  <main>
+    <img class="logo" src="cip/assets/logo-heineken-transparente.png" alt="Heineken" />
+    <h1>Sistemas da Fermentação</h1>
+    <p class="sub">Escolha o sistema que deseja abrir.</p>
+    <nav class="lista">
+      <a class="sistema" href="ftr/">
+        <div class="nome">Painel FTR</div>
+        <div class="desc">First Time Right da produção de cerveja · sem login para consultar</div>
+      </a>
+      <a class="sistema" href="cip/">
+        <div class="nome">Rastreabilidade de CIP</div>
+        <div class="desc">Registro e consulta das limpezas CIP · requer login</div>
+      </a>
+    </nav>
+  </main>
+</body>
+</html>
